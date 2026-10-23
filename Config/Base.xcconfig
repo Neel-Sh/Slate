@@ -1,0 +1,9 @@
+// Shared build configuration for Slate.
+//
+// Put machine-specific values in Config/Local.xcconfig (git-ignored), e.g.:
+//   GOOGLE_IOS_CLIENT_ID = 1234567890-abcdefg.apps.googleusercontent.com
+// The iOS OAuth client ID is configuration, not a secret, but it is specific to your Google Cloud project.
+
+GOOGLE_IOS_CLIENT_ID =
+
+#include? "Local.xcconfig"
