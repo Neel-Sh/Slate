@@ -17,16 +17,18 @@ final class ThreadListModel {
     func reload(_ model: AppModel, mailbox: Mailbox) async {
         guard let store = model.store else { return }
         let newKey = mailbox.id + "|" + model.scopeAccountIDs.joined(separator: ",")
-        if newKey != key {
+        let switched = newKey != key
+        if switched {
             key = newKey
             providerTokens = [:]
             reachedEnd = false
-            threads = []
         }
         // Keep at least as many rows as are visible so reloading never moves the scroll position.
-        let limit = max(Self.pageSize, threads.count)
+        // Switching views keeps the old rows until the new ones are read, so the empty state never flashes.
+        let limit = switched ? Self.pageSize : max(Self.pageSize, threads.count)
         let fresh = (try? await store.threads(mailbox: mailbox, accountIDs: model.scopeAccountIDs, before: nil, limit: limit)) ?? []
-        if loadedOnce && Set(fresh.map(\.ref)) != Set(threads.map(\.ref)) {
+        guard key == newKey else { return }
+        if loadedOnce && !switched && Set(fresh.map(\.ref)) != Set(threads.map(\.ref)) {
             withAnimation(Motion.standard) { threads = fresh }
         } else {
             threads = fresh

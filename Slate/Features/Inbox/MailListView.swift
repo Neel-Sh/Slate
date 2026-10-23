@@ -32,13 +32,27 @@ private struct MailListContent: View {
     @State private var laterTargets: [ThreadRef]?
     @State private var labelTargets: [ThreadRef]?
     @State private var focusInfo: ThreadSummary?
+    @State private var filters: Set<MailFilter> = []
 
     private var mailbox: Mailbox { model.mailbox }
     private var isInbox: Bool { mailbox == .inbox }
+    /// Inbox and label views share one row of tabs so moving between them stays in place.
+    private var showsTabs: Bool {
+        if case .label = mailbox { return true }
+        return isInbox
+    }
     private var showsFocused: Bool { isInbox && model.prefs.showFocused }
 
     private var visibleThreads: [ThreadSummary] {
-        showsFocused ? list.threads.filter { model.focus.reason(for: $0) != nil } : list.threads
+        list.threads.filter { t in
+            (!showsFocused || model.focus.reason(for: t) != nil) && filters.allSatisfy { $0.matches(t) }
+        }
+    }
+
+    /// The subtitle always says what is being shown, so an active filter is never hidden.
+    private var subtitle: String {
+        let names = MailFilter.allCases.filter(filters.contains).map(\.title)
+        return names.isEmpty ? model.scopeTitle : (names + [model.scopeTitle]).filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     var body: some View {
@@ -54,7 +68,7 @@ private struct MailListContent: View {
             }
         }
         .navigationTitle(mailbox.title)
-        .navigationSubtitle(model.scopeTitle)
+        .navigationSubtitle(subtitle)
         .toolbar { toolbar }
         .environment(\.editMode, $editMode)
         .task(id: "\(mailbox.id)|\(model.scopeAccountIDs)|\(model.dataVersion)") {
@@ -82,11 +96,11 @@ private struct MailListContent: View {
     @ViewBuilder private var threadList: some View {
         let groups = Dictionary(grouping: visibleThreads) { mailbox == .later ? DateGrouping.Group.today : DateGrouping.group($0.lastDate) }
         List(selection: $selection) {
-            if isInbox {
-                inboxViewPicker
+            if showsTabs {
+                InboxTabs()
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.slate.canvas)
-                    .listRowInsets(EdgeInsets(top: Spacing.xs, leading: Spacing.md, bottom: Spacing.xs, trailing: Spacing.md))
+                    .listRowInsets(EdgeInsets())
                     .selectionDisabled()
             }
             accountProblems
@@ -94,6 +108,7 @@ private struct MailListContent: View {
                 Text("Later is kept on this iPhone. These conversations stay in your Gmail inbox elsewhere and return here at the time you chose.")
                     .font(.footnote).foregroundStyle(Color.slate.inkSecondary)
                     .listRowSeparator(.hidden)
+                    .listRowBackground(Color.slate.canvas)
                     .selectionDisabled()
             }
             ForEach(groups.keys.sorted(), id: \.self) { group in
@@ -104,18 +119,27 @@ private struct MailListContent: View {
                         Text(group.title)
                             .font(.footnote.weight(.medium))
                             .foregroundStyle(Color.slate.inkMetadata)
+                            .listRowInsets(EdgeInsets(top: Spacing.lg, leading: Spacing.md + 2, bottom: Spacing.xxs, trailing: Spacing.md))
                     }
                 }
             }
             if !list.reachedEnd && list.loadedOnce && !visibleThreads.isEmpty && mailbox != .later {
-                HStack { Spacer(); ProgressView(); Spacer() }
+                // A small spinner on the canvas, so paging never draws a band across the list.
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(Color.slate.inkMetadata)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, Spacing.lg)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.slate.canvas)
                     .listRowSeparator(.hidden)
-                    .task { await list.loadMore(model, mailbox: mailbox) }
+                    .accessibilityLabel("Loading more conversations")
+                    .task(id: filters.isEmpty ? 0 : list.threads.count) { await list.loadMore(model, mailbox: mailbox) }
                     .selectionDisabled()
             }
         }
         .listStyle(.plain)
-        .listSectionSpacing(.compact)
+        .listSectionSpacing(0)
         .environment(\.defaultMinListHeaderHeight, 24)
         .scrollContentBackground(.hidden)
         .background(Color.slate.canvas)
@@ -182,11 +206,6 @@ private struct MailListContent: View {
         Task { await model.perform(action, on: refs, toast: toast) }
     }
 
-    @ViewBuilder private var inboxViewPicker: some View {
-        @Bindable var prefs = model.prefs
-        InboxTabs(showFocused: $prefs.showFocused, unreadAll: list.threads.filter(\.isUnread).count)
-    }
-
     @ViewBuilder private var accountProblems: some View {
         ForEach(model.accounts.filter { $0.status != .connected && model.scopeAccountIDs.contains($0.id) }) { a in
             Button { model.showSettings = true } label: {
@@ -209,12 +228,16 @@ private struct MailListContent: View {
             Label("You're offline. Downloaded messages are available.", systemImage: "wifi.slash")
                 .font(.footnote).foregroundStyle(Color.slate.inkSecondary)
                 .listRowSeparator(.hidden)
+                .listRowBackground(Color.slate.canvas)
                 .selectionDisabled()
         }
     }
 
     @ViewBuilder private var emptyState: some View {
-        if model.accounts.isEmpty {
+        if !filters.isEmpty && !list.threads.isEmpty {
+            EmptyStateView(title: "No matching conversations", message: "Nothing here matches \(MailFilter.allCases.filter(filters.contains).map(\.title).joined(separator: " and ")).",
+                           symbol: "line.3.horizontal.decrease", actionTitle: "Clear Filters") { withAnimation(Motion.standard) { filters = [] } }
+        } else if model.accounts.isEmpty {
             EmptyStateView(title: "No accounts", message: "Add a Gmail account to get started.", symbol: "person.crop.circle.badge.plus",
                            actionTitle: "Add Account") { model.showSettings = true }
         } else if showsFocused && !list.threads.isEmpty {
@@ -255,11 +278,16 @@ private struct MailListContent: View {
                 }
                 .accessibilityLabel("Mailboxes")
             }
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                if model.hasMultipleAccounts { AccountScopeMenu() }
-                if mailbox.isThreadList {
+            if mailbox.isThreadList {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button("Select") { withAnimation { editMode = .active } }
                 }
+            }
+            if mailbox.isThreadList || model.hasMultipleAccounts {
+                ToolbarItem(placement: .bottomBar) {
+                    FilterMenu(filters: $filters, showsMailFilters: mailbox.isThreadList)
+                }
+                ToolbarSpacer(.fixed, placement: .bottomBar)
             }
             DefaultToolbarItem(kind: .search, placement: .bottomBar)
             ToolbarSpacer(.flexible, placement: .bottomBar)
@@ -308,21 +336,77 @@ struct RefList: Identifiable {
     var id: String { refs.map { $0.accountID + $0.threadID }.joined() }
 }
 
-struct AccountScopeMenu: View {
+/// Quick filters on the loaded list. They narrow what is shown and never change mail.
+enum MailFilter: String, CaseIterable, Identifiable {
+    case unread, starred, attachments
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .unread: "Unread"
+        case .starred: "Starred"
+        case .attachments: "Attachments"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .unread: "envelope.badge"
+        case .starred: "star"
+        case .attachments: "paperclip"
+        }
+    }
+    func matches(_ t: ThreadSummary) -> Bool {
+        switch self {
+        case .unread: t.isUnread
+        case .starred: t.isStarred
+        case .attachments: t.hasAttachment
+        }
+    }
+}
+
+/// One place to choose what the list shows: quick filters and, with several accounts, which account.
+struct FilterMenu: View {
     @Environment(AppModel.self) private var model
+    @Binding var filters: Set<MailFilter>
+    var showsMailFilters: Bool
+
+    private var isActive: Bool { !filters.isEmpty || model.scopeAccountID != nil }
+
     var body: some View {
         Menu {
-            Picker("Account", selection: Binding(get: { model.scopeAccountID }, set: { model.scopeAccountID = $0 })) {
-                Label("All Accounts", systemImage: "tray.2").tag(String?.none)
-                ForEach(model.accounts) { a in
-                    Text(a.friendlyName.isEmpty ? a.email : "\(a.friendlyName) · \(a.email)").tag(Optional(a.id))
+            if showsMailFilters {
+                Section("Show Only") {
+                    ForEach(MailFilter.allCases) { f in
+                        Toggle(f.title, systemImage: f.symbol, isOn: Binding(
+                            get: { filters.contains(f) },
+                            set: { on in withAnimation(Motion.standard) { if on { filters.insert(f) } else { filters.remove(f) } } }))
+                    }
                 }
             }
-            Divider()
-            Button("Manage Accounts…", systemImage: "gear") { model.showSettings = true }
+            if model.hasMultipleAccounts {
+                Section("Account") {
+                    Picker("Account", selection: Binding(get: { model.scopeAccountID }, set: { model.scopeAccountID = $0 })) {
+                        Text("All Accounts").tag(String?.none)
+                        ForEach(model.accounts) { a in
+                            Text(a.shortLabel).tag(Optional(a.id))
+                        }
+                    }
+                    .pickerStyle(.inline)
+                }
+            }
+            if isActive {
+                Section {
+                    Button("Clear Filters", systemImage: "xmark") {
+                        withAnimation(Motion.standard) { filters = []; model.scopeAccountID = nil }
+                    }
+                }
+            }
         } label: {
-            Label("Account: \(model.scopeTitle)", systemImage: model.scopeAccountID == nil ? "person.2" : "person.crop.circle")
+            // Filled when something is narrowing the list, as in Mail.
+            Label("Filter", systemImage: isActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease")
         }
+        .menuActionDismissBehavior(.disabled)
+        .sensoryFeedback(.selection, trigger: filters)
+        .accessibilityValue(isActive ? "On" : "Off")
     }
 }
 
@@ -421,39 +505,80 @@ struct FocusExplanation: View {
     }
 }
 
-/// Two quiet pills instead of a segmented control. The selected view is filled; the other is plain text.
+/// All, Focused, then the account's labels, as quiet pills that scroll sideways.
+/// The selected view is filled; the rest are plain text. Picking a label opens that label's conversations.
 struct InboxTabs: View {
-    @Binding var showFocused: Bool
-    var unreadAll: Int
+    @Environment(AppModel.self) private var model
     @Namespace private var ns
 
-    var body: some View {
-        HStack(spacing: Spacing.xxs) {
-            tab("Focused", selected: showFocused) { showFocused = true }
-            tab("All", selected: !showFocused, count: unreadAll) { showFocused = false }
-            Spacer()
+    private enum Tab: Hashable { case all, focused, label(String) }
+
+    private var selected: Tab {
+        switch model.mailbox {
+        case .inbox: model.prefs.showFocused ? .focused : .all
+        case .label(let account, let label, _): .label(account + "/" + label)
+        default: .all
         }
-        .sensoryFeedback(.selection, trigger: showFocused)
+    }
+
+    private var labels: [MailLabel] {
+        model.labels.filter { $0.kind == .user }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal) {
+                HStack(spacing: Spacing.xxs) {
+                    tab("All", .all, count: model.counts.inboxUnread.values.reduce(0, +),
+                        hint: "Every conversation in your Inbox.") { open(.inbox, focused: false) }
+                    tab("Focused", .focused, hint: "Conversations from people that likely need you.") { open(.inbox, focused: true) }
+                    if !labels.isEmpty {
+                        Capsule()
+                            .fill(Color.slate.separator)
+                            .frame(width: 1, height: 18)
+                            .padding(.horizontal, Spacing.xxs)
+                            .accessibilityHidden(true)
+                    }
+                    ForEach(labels) { l in
+                        tab(l.leafName, .label(l.id), count: model.counts.labelUnread[l.id] ?? 0, hint: "Conversations labeled \(l.name).") {
+                            open(.label(accountID: l.accountID, labelID: l.labelID, name: l.name), focused: nil)
+                        }
+                    }
+                }
+                .padding(.horizontal, Spacing.md)
+            }
+            .scrollIndicators(.hidden)
+            .scrollClipDisabled()
+            .onAppear { proxy.scrollTo(selected, anchor: .center) }
+            .onChange(of: selected) { _, new in withAnimation(Motion.standard) { proxy.scrollTo(new, anchor: .center) } }
+        }
+        .sensoryFeedback(.selection, trigger: selected)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Inbox view")
     }
 
-    private func tab(_ title: String, selected: Bool, count: Int = 0, action: @escaping () -> Void) -> some View {
-        Button {
-            withAnimation(Motion.standard) { action() }
-        } label: {
+    private func open(_ mailbox: Mailbox, focused: Bool?) {
+        withAnimation(Motion.standard) {
+            if let focused { model.prefs.showFocused = focused }
+            model.mailbox = mailbox
+        }
+    }
+
+    private func tab(_ title: String, _ tab: Tab, count: Int = 0, hint: String, action: @escaping () -> Void) -> some View {
+        let isSelected = tab == selected
+        return Button(action: action) {
             HStack(spacing: 5) {
-                Text(title)
+                Text(title).lineLimit(1)
                 if count > 0 {
                     Text("\(count)").monospacedDigit().foregroundStyle(Color.slate.inkMetadata)
                 }
             }
-            .font(.subheadline.weight(selected ? .semibold : .regular))
-            .foregroundStyle(selected ? Color.slate.inkPrimary : Color.slate.inkSecondary)
+            .font(.subheadline.weight(isSelected ? .semibold : .regular))
+            .foregroundStyle(isSelected ? Color.slate.inkPrimary : Color.slate.inkSecondary)
             .padding(.horizontal, 14)
             .frame(minHeight: 34)
             .background {
-                if selected {
+                if isSelected {
                     Capsule().fill(Color.slate.surfaceSecondary).matchedGeometryEffect(id: "tab", in: ns)
                 }
             }
@@ -461,7 +586,8 @@ struct InboxTabs: View {
         }
         .buttonStyle(.plain)
         .frame(minHeight: Spacing.minHit)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityHint(title == "Focused" ? "Conversations from people that likely need you." : "Every conversation in your Inbox.")
+        .id(tab)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityHint(hint)
     }
 }

@@ -17,7 +17,7 @@ struct MessageView: View {
     private var isMe: Bool { model.identities.contains(message.from?.normalized ?? "") }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.xs) {
+        VStack(alignment: .leading, spacing: isExpanded ? Spacing.md : Spacing.xs) {
             Button(action: toggle) { headerRow }
                 .buttonStyle(.plain)
                 .accessibilityHint(isExpanded ? "Collapses this message." : "Expands this message.")
@@ -30,7 +30,7 @@ struct MessageView: View {
             }
         }
         .padding(.horizontal, Spacing.md)
-        .padding(.vertical, Spacing.sm)
+        .padding(.vertical, isExpanded ? Spacing.md : Spacing.sm + 2)
     }
 
     private var headerRow: some View {
@@ -172,7 +172,7 @@ struct PlainTextBody: View {
         Text(attributed)
             .font(.body)
             .foregroundStyle(Color.slate.inkPrimary)
-            .lineSpacing(3)
+            .lineSpacing(4)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)

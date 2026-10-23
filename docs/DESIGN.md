@@ -25,13 +25,14 @@ NavigationStack (root)
    │                                 ├─ Labels (per account; create / rename / delete)
    │                                 └─ Settings → Accounts, Sending, Notifications, Swipes,
    │                                               Reading, Intelligence, Privacy, About
-   ├─ top-trailing: [Account menu: All Accounts / each account / Manage…]  [Select]
+   ├─ top-trailing: [Select]
    ├─ header:       Focused | All  (Inbox only)
    ├─ rows → push ConversationView
    │         ├─ toolbar: Archive · Later · Move/Label · Reply menu · More
    │         ├─ Summary (on demand, labelled, Foundation Models)
    │         └─ Suggested reply (intentions → editable draft in Composer)
-   ├─ bottom bar:   [Search (system search field)] ···status··· [Compose]
+   ├─ bottom bar:   [Filter menu: Unread · Starred · Attachments; Account] [Search] [Compose]
+   │                 └─ active filters fill the icon and are named in the subtitle
    │                 └─ search results replace the list (local + Gmail sections)
    ├─ edit mode:    bottom bar → Archive · Trash · Mark · More(Star, Label, Later, Spam)
    └─ overlay:      Undo Send / Undo action capsule (persists across navigation)
@@ -78,8 +79,8 @@ Typography roles (all semantic text styles, Dynamic Type through AX5, Bold Text 
 | --- | --- | --- |
 | Root title | `.largeTitle` (system nav bar) | system |
 | Conversation subject | `.title2` | semibold |
-| Row sender | `.headline` | semibold unread / regular read |
-| Row subject | `.callout` | semibold unread / medium read |
+| Row sender | `.headline` | semibold unread / medium read |
+| Row subject | `.subheadline` | semibold unread / regular read |
 | Row preview | `.subheadline` | regular, inkSecondary, 2 lines |
 | Body / composer | `.body` | regular |
 | Time, group headings | `.footnote` | regular / medium; monospaced digits for countdowns only |

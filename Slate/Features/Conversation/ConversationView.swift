@@ -5,6 +5,7 @@ struct ConversationView: View {
     @State private var convo: ConversationModel
     @State private var showLater = false
     @State private var showLabels = false
+    @State private var showAllPoints = false
 
     init(ref: ThreadRef) { _convo = State(initialValue: ConversationModel(ref: ref)) }
 
@@ -61,19 +62,16 @@ struct ConversationView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
                 .accessibilityAddTraits(.isHeader)
-            HStack(spacing: 6) {
-                let userLabels = (convo.thread?.labelIDs ?? []).compactMap { id in
-                    model.labels.first { $0.accountID == convo.ref.accountID && $0.labelID == id && $0.kind == .user }
+            let userLabels = (convo.thread?.labelIDs ?? []).compactMap { id in
+                model.labels.first { $0.accountID == convo.ref.accountID && $0.labelID == id && $0.kind == .user }
+            }
+            let later = convo.thread?.laterUntil.flatMap { $0 > .now ? $0 : nil }
+            let showsAccount = model.hasMultipleAccounts && account != nil
+            if !userLabels.isEmpty || convo.thread?.inSpam == true || convo.thread?.inTrash == true || later != nil || showsAccount {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 6) { metadata(userLabels, later: later, showsAccount: showsAccount) }
+                    VStack(alignment: .leading, spacing: 6) { metadata(userLabels, later: later, showsAccount: showsAccount) }
                 }
-                ForEach(userLabels) { LabelChip(text: $0.leafName, tone: ChipTone.forLabel($0.colorHex, name: $0.name)) }
-                if convo.thread?.inSpam == true { LabelChip(text: "Spam", tone: .amber) }
-                if convo.thread?.inTrash == true { LabelChip(text: "Trash", tone: .stone) }
-                if let until = convo.thread?.laterUntil, until > .now {
-                    Label("Later · \(until.formatted(.dateTime.weekday().hour().minute()))", systemImage: "clock")
-                        .font(.caption.weight(.medium)).foregroundStyle(Color.slate.inkSecondary)
-                }
-                Spacer(minLength: 0)
-                if model.hasMultipleAccounts, let account { AccountTag(account: account) }
             }
             if convo.thread?.inSpam == true {
                 Text("This conversation is in Spam. Links and images are blocked. Choose Not Spam to move it to your Inbox.")
@@ -82,31 +80,49 @@ struct ConversationView: View {
         }
         .padding(.horizontal, Spacing.md)
         .padding(.top, Spacing.xs)
-        .padding(.bottom, Spacing.md)
+        .padding(.bottom, Spacing.lg)
+    }
+
+    @ViewBuilder private func metadata(_ userLabels: [MailLabel], later: Date?, showsAccount: Bool) -> some View {
+        if showsAccount, let account { AccountTag(account: account) }
+        ForEach(userLabels) { LabelChip(text: $0.leafName, tone: ChipTone.forLabel($0.colorHex, name: $0.name)) }
+        if convo.thread?.inSpam == true { LabelChip(text: "Spam", tone: .amber) }
+        if convo.thread?.inTrash == true { LabelChip(text: "Trash", tone: .stone) }
+        if let later {
+            Label("Later · \(later.formatted(.dateTime.weekday().hour().minute()))", systemImage: "clock")
+                .font(.caption.weight(.medium)).foregroundStyle(Color.slate.inkSecondary)
+        }
     }
 
     // MARK: Summary
 
     @ViewBuilder private func summarySection(_ proxy: ScrollViewProxy) -> some View {
-        if model.intelligence.isAvailable && convo.isLongEnoughToSummarize {
+        if model.intelligence.isAvailable && convo.isLongEnoughToSummarize && convo.thread?.isMailingList != true
+            && !Self.isAutomated(convo.latest?.from) {
             Group {
                 switch convo.summary {
                 case .idle:
                     Button { Task { await convo.summarize(model) } } label: {
-                        Label("Summarize Conversation", systemImage: "text.line.first.and.arrowtriangle.forward")
-                            .font(.subheadline.weight(.medium))
-                            .frame(maxWidth: .infinity, minHeight: Spacing.minHit, alignment: .leading)
-                            .padding(.horizontal, Spacing.sm)
+                        HStack(spacing: 6) {
+                            AuraRing()
+                            Text("Summarize")
+                        }
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Color.slate.inkPrimary)
+                        .padding(.horizontal, Spacing.sm)
+                        .frame(minHeight: 34)
+                        .background(Color.slate.surfaceSecondary, in: Capsule())
+                        .contentShape(Capsule())
                     }
-                    .panel()
+                    .buttonStyle(.plain)
+                    .frame(minHeight: Spacing.minHit)
+                    .accessibilityLabel("Summarize Conversation")
                 case .loading:
-                    HStack(spacing: Spacing.sm) {
+                    HStack(spacing: Spacing.xs) {
                         ProgressView().controlSize(.small)
-                        Text("Summarizing on this iPhone…").font(.subheadline).foregroundStyle(Color.slate.inkSecondary)
+                        Text("Summarizing…").font(.subheadline).foregroundStyle(Color.slate.inkSecondary)
                     }
-                    .frame(maxWidth: .infinity, minHeight: Spacing.minHit, alignment: .leading)
-                    .padding(.horizontal, Spacing.sm)
-                    .panel()
+                    .frame(minHeight: Spacing.minHit)
                 case .failed(let message):
                     HStack {
                         Text(message).font(.footnote).foregroundStyle(Color.slate.inkSecondary)
@@ -115,41 +131,59 @@ struct ConversationView: View {
                     }
                     .padding(Spacing.sm).panel()
                 case .ready(let digest):
-                    VStack(alignment: .leading, spacing: Spacing.xs) {
+                    let points = showAllPoints ? digest.points : Array(digest.points.prefix(3))
+                    VStack(alignment: .leading, spacing: Spacing.sm) {
                         HStack {
-                            GeneratedBadge(title: "Summary · generated on this iPhone")
+                            GeneratedBadge(title: "Summary")
                             Spacer()
-                            Button { convo.summary = .idle } label: { Image(systemName: "xmark").font(.footnote.weight(.semibold)) }
-                                .frame(width: Spacing.minHit, height: Spacing.minHit)
-                                .accessibilityLabel("Dismiss summary")
+                            Button { convo.summary = .idle; showAllPoints = false } label: {
+                                Image(systemName: "xmark").font(.caption.weight(.semibold)).foregroundStyle(Color.slate.inkMetadata)
+                            }
+                            .frame(width: Spacing.minHit, height: 28)
+                            .accessibilityLabel("Dismiss summary")
                         }
-                        ForEach(digest.points) { p in
+                        ForEach(points) { p in
                             Button {
                                 if let id = p.messageID {
                                     convo.expanded.insert(id)
                                     withAnimation { proxy.scrollTo(id, anchor: .top) }
                                 }
                             } label: {
-                                HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
-                                    Text("•").foregroundStyle(Color.slate.inkMetadata)
-                                    Text(p.text).font(.subheadline).foregroundStyle(Color.slate.inkPrimary).multilineTextAlignment(.leading)
+                                HStack(alignment: .firstTextBaseline, spacing: Spacing.sm) {
+                                    Circle().fill(Color.slate.inkMetadata).frame(width: 4, height: 4)
+                                        .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
+                                    Text(p.text)
+                                        .font(.subheadline)
+                                        .foregroundStyle(Color.slate.inkPrimary)
+                                        .lineSpacing(2)
+                                        .multilineTextAlignment(.leading)
+                                        .fixedSize(horizontal: false, vertical: true)
                                     Spacer(minLength: 0)
-                                    if p.messageID != nil { Image(systemName: "arrow.down.right").font(.caption2).foregroundStyle(Color.slate.inkMetadata) }
                                 }
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .disabled(p.messageID == nil)
                             .accessibilityHint(p.messageID != nil ? "Shows the message this comes from." : "")
                         }
-                        Text("Summaries can be wrong. Tap a point to see the original message.")
+                        if digest.points.count > points.count {
+                            Button("Show \(digest.points.count - points.count) More") { withAnimation(Motion.standard) { showAllPoints = true } }
+                                .font(.footnote.weight(.medium))
+                                .foregroundStyle(Color.slate.inkSecondary)
+                        }
+                        Text("Made on this iPhone and may be wrong. Tap a point to see its message.")
                             .font(.caption).foregroundStyle(Color.slate.inkMetadata)
+                            .padding(.top, Spacing.xxs)
                     }
-                    .padding(Spacing.sm)
+                    .padding(.horizontal, Spacing.md)
+                    .padding(.top, Spacing.xs)
+                    .padding(.bottom, Spacing.md)
                     .panel()
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, Spacing.md)
-            .padding(.bottom, Spacing.md)
+            .padding(.bottom, Spacing.sm)
         }
     }
 

@@ -5,13 +5,13 @@ import os
 
 @Generable
 nonisolated struct GeneratedSummary {
-    @Guide(description: "Between one and four short, factual points about the conversation, most important first.", .count(1...4))
+    @Guide(description: "Between one and four short, factual points about the conversation, most important first. Prefer fewer points; skip anything that only restates who wrote when.", .count(1...4))
     var points: [GeneratedPoint]
 }
 
 @Generable
 nonisolated struct GeneratedPoint {
-    @Guide(description: "One plain sentence. Keep names, amounts and dates exactly as written in the messages.")
+    @Guide(description: "One plain sentence of at most 20 words. Keep names, amounts and dates exactly as written in the messages. Don't mention when a message was sent.")
     var text: String
     @Guide(description: "The number N from the [Message N] marker of the message that states this point.")
     var messageNumber: Int
